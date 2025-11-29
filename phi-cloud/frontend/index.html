@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ΦΦ-Cloud Interface</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>ΦΦ-Cloud</h1>
+            <p>Holographic Tensor Processing Unit</p>
+        </header>
+
+        <main>
+            <section class="controls">
+                <h2>Genesis Chamber</h2>
+                <form id="upload-form">
+                    <div class="form-group">
+                        <label for="n_size">Matrix Size (N x N)</label>
+                        <input type="number" id="n_size" name="n_size" value="1024" min="128" max="16384" step="128">
+                    </div>
+                    <div class="form-group">
+                        <label for="matrix_a">Matrix A (CSV)</label>
+                        <input type="file" id="matrix_a" name="matrix_a" accept=".csv" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="matrix_b">Matrix B (CSV)</label>
+                        <input type="file" id="matrix_b" name="matrix_b" accept=".csv" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="api_key">API Key</label>
+                        <input type="password" id="api_key" name="api_key" required>
+                    </div>
+                    <button type="submit">Initiate Genesis</button>
+                </form>
+                <button id="generate-random">Generate Random Matrices</button>
+            </section>
+
+            <section class="monitor">
+                <h2>System Monitor</h2>
+                <div class="job-status">
+                    <strong>Job ID:</strong> <span id="job-id">-</span><br>
+                    <strong>Status:</strong> <span id="job-status">-</span>
+                </div>
+                <div class="eyelid-container">
+                    <h3>Eyelid Visualizer (Spectral Rupture)</h3>
+                    <canvas id="eyelid-canvas" width="256" height="256"></canvas>
+                </div>
+                <div class="performance-container">
+                    <h3>Performance Monitor</h3>
+                    <canvas id="performance-canvas" width="256" height="150"></canvas>
+                </div>
+                <button id="download-result" disabled>Download Result</button>
+            </section>
+        </main>
+    </div>
+    <script src="app.js"></script>
+</body>
+</html>
