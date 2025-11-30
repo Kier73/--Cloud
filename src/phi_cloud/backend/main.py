@@ -7,9 +7,16 @@ from pathlib import Path
 import logging
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+from pydantic import BaseModel
+from typing import List, Tuple
+import matplotlib
+matplotlib.use('Agg') # Use non-interactive backend
+import matplotlib.pyplot as plt
+import numpy as np
 
-from .core.jobs import create_job, get_job, run_computation, update_job_status
-from .core.physics import get_preview_slice, HolographicCore
+from phi_cloud.backend.core.jobs import create_job, get_job, run_computation, update_job_status
+from phi_cloud.backend.core.physics import get_preview_slice, HolographicCore
+from phi_cloud_core.vpu import VirtualHolographicPU
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -51,7 +58,10 @@ def verify_api_key(x_api_key: str = Header(...)):
     if x_api_key != API_KEY:
         raise HTTPException(status_code=401, detail="Invalid API Key")
 
-import numpy as np
+# --- Pydantic Models ---
+class TruthTableRequest(BaseModel):
+    truth_table: List[Tuple[int, int]]
+
 # --- API Endpoints ---
 
 async def run_computation_in_executor(job_id: str, n_size: int, a_path: str, b_path: str):
@@ -160,6 +170,86 @@ async def preview(job_id: str, x_api_key: str = Header(...)):
 
     return JSONResponse(content={"heatmap": slice_data.flatten().tolist()})
 
+# --- VPU Compilation ---
+
+def compile_and_visualize_sync(truth_table: List[Tuple[int, int]]) -> str:
+    """
+    Runs the VPU compilation and generates a visualization.
+    Returns the path to the saved image.
+    """
+    try:
+        logger.info("Initializing Virtual Holographic PU...")
+        vpu = VirtualHolographicPU(size=128) # Reduced size for faster API response
+
+        logger.info(f"Learning function from truth table: {truth_table}")
+        vpu.learn_function(truth_table)
+
+        logger.info("Executing kernel for visualization...")
+        val_high, flow_high = vpu.execute(1)
+        val_low, flow_low = vpu.execute(0)
+        logger.info(f"Execution results: High={val_high:.2f}, Low={val_low:.2f}")
+
+        # --- Visualization ---
+        logger.info("Generating hardware schematic visualization...")
+        fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+        fig.patch.set_facecolor('#050505')
+
+        hardware = vpu.substrate.n_base + vpu.substrate.n_learned
+        axes[0].imshow(hardware, cmap='gray')
+        axes[0].set_title("1. Compiled Geometry", color='white')
+        axes[0].scatter(*vpu.PORT_IN_A, c='lime', label='In')
+        axes[0].scatter(*vpu.PORT_OUT_Y, c='red', label='Out')
+        axes[0].legend()
+
+        axes[1].imshow(flow_high, cmap='inferno')
+        axes[1].set_title(f"2. Execution (Input=1)", color='#00ff00')
+
+        vmax = np.max(flow_high) if np.max(flow_high) > 0 else 1.0
+        axes[2].imshow(flow_low, cmap='inferno', vmin=0, vmax=vmax)
+        axes[2].set_title(f"3. Execution (Input=0)", color='gray')
+
+        for ax in axes:
+            ax.axis('off')
+
+        plt.tight_layout()
+
+        temp_dir = Path(STORAGE_PATH) / "vpu_temp"
+        temp_dir.mkdir(exist_ok=True, parents=True)
+        output_path = temp_dir / f"{os.urandom(16).hex()}.png"
+
+        plt.savefig(output_path, facecolor=fig.get_facecolor(), edgecolor='none')
+        plt.close(fig)
+
+        logger.info(f"Visualization saved to {output_path}")
+        return str(output_path)
+
+    except Exception as e:
+        logger.error(f"Error during VPU compilation: {e}", exc_info=True)
+        return None
+
+@app.post("/compile-hologram")
+async def compile_hologram(
+    request: TruthTableRequest,
+    x_api_key: str = Header(...)
+):
+    """
+    Compiles a function from a truth table and returns a visualization.
+    """
+    verify_api_key(x_api_key)
+    check_disk_pressure()
+
+    loop = asyncio.get_running_loop()
+    image_path = await loop.run_in_executor(
+        executor,
+        compile_and_visualize_sync,
+        request.truth_table
+    )
+
+    if image_path and os.path.exists(image_path):
+        return FileResponse(image_path, media_type='image/png')
+    else:
+        raise HTTPException(status_code=500, detail="Failed to generate hologram visualization.")
+
 @app.on_event("startup")
 async def on_startup():
     """Create storage directory on startup."""
@@ -168,8 +258,6 @@ async def on_startup():
 @app.on_event("shutdown")
 async def on_shutdown():
     """Cleanup storage directory on shutdown."""
-    # In a real production scenario, you might want to persist job data
-    # and not clean up on every shutdown.
     storage_path = Path(STORAGE_PATH)
     for item in storage_path.iterdir():
         if item.is_dir():
