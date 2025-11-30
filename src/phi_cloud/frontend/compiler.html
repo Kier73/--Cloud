@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF--8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ΦΦ-Cloud Compiler</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>ΦΦ-Cloud</h1>
+            <p>Interactive VPU Compiler</p>
+        </header>
+
+        <main>
+            <section class="controls">
+                <h2>Compiler Configuration</h2>
+                <form id="compiler-form">
+                    <div class="form-group">
+                        <label for="api_key">API Key</label>
+                        <input type="password" id="api_key" name="api_key" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="input-ports">Input Ports (comma-separated)</label>
+                        <input type="text" id="input-ports" value="64, 192">
+                    </div>
+                    <div class="form-group">
+                        <label for="output-ports">Output Ports (comma-separated)</label>
+                        <input type="text" id="output-ports" value="128">
+                    </div>
+                    <div class="form-group">
+                        <label for="truth-table">Truth Table (JSON)</label>
+                        <textarea id="truth-table" rows="6">[[[0,0],[1]],[[0,1],[1]],[[1,0],[1]],[[1,1],[0]]]</textarea>
+                    </div>
+                    <button type="submit">Compile</button>
+                </form>
+            </section>
+
+            <section class="monitor">
+                <h2>Compilation Result</h2>
+                <div id="results-container" class="hidden">
+                    <div class="job-status">
+                        <strong>Status:</strong> <span id="compile-status">-</span>
+                    </div>
+                    <div class="eyelid-container">
+                        <h3>Compiled Geometry</h3>
+                        <img id="result-image" src="" alt="Compiled Geometry">
+                    </div>
+                    <div class="performance-container">
+                        <h3>Loss History</h3>
+                        <canvas id="loss-canvas" width="256" height="150"></canvas>
+                    </div>
+                    <div class="verification-results">
+                        <h3>Verification</h3>
+                        <pre id="verification-summary"></pre>
+                        <table id="verification-table">
+                            <thead>
+                                <tr>
+                                    <th>Input</th>
+                                    <th>Target</th>
+                                    <th>Output</th>
+                                    <th>Result</th>
+                                </tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+    <script src="compiler.js"></script>
+</body>
+</html>

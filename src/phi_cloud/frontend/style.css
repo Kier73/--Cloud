@@ -151,3 +151,62 @@ button:disabled {
     width: 100%;
     height: auto;
 }
+
+textarea {
+    width: 100%;
+    padding: 0.5rem;
+    background-color: var(--background-color);
+    border: 1px solid var(--border-color);
+    color: var(--text-color);
+    font-family: inherit;
+    resize: vertical;
+}
+
+#result-image {
+    width: 100%;
+    border: 1px solid var(--primary-color);
+    margin-top: 1rem;
+    background-color: #050505;
+}
+
+.hidden {
+    display: none;
+}
+
+.verification-results {
+    margin-top: 1.5rem;
+}
+
+#verification-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 1rem;
+}
+
+#verification-table th, #verification-table td {
+    border: 1px solid var(--border-color);
+    padding: 0.5rem;
+    text-align: center;
+}
+
+#verification-table th {
+    background-color: var(--background-color);
+}
+
+.pass {
+    color: #00ff00;
+    font-weight: bold;
+}
+
+.fail {
+    color: #ff4444;
+    font-weight: bold;
+}
+
+#loss-canvas {
+    width: 100%;
+    height: auto;
+    border: 1px solid var(--secondary-color);
+    margin-top: 1rem;
+    background-color: #0a0a10;
+}
