@@ -4,3 +4,6 @@ numpy
 scipy
 python-multipart
 pydantic
+matplotlib
+pytest
+httpx
