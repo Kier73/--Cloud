@@ -9,3 +9,4 @@ build/
 
 # Storage
 src/phi_cloud/backend/storage/
+src/phi_cloud/backend/storage/vpu_temp/

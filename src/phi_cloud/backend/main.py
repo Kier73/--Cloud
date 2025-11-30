@@ -1,3 +1,5 @@
+from fastapi import FastAPI, HTTPException, Header
+from fastapi.responses import FileResponse
 from fastapi import FastAPI, HTTPException, Header, UploadFile, File, Form
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,6 +12,11 @@ from concurrent.futures import ThreadPoolExecutor
 from pydantic import BaseModel
 from typing import List, Tuple
 import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import numpy as np
+
+from phi_cloud_core.vpu import VirtualHolographicPU, PhiSubstrate
 matplotlib.use('Agg') # Use non-interactive backend
 import matplotlib.pyplot as plt
 import numpy as np
@@ -24,11 +31,74 @@ logger = logging.getLogger(__name__)
 
 # --- Configuration ---
 API_KEY = os.environ.get("PHI_CLOUD_API_KEY", "my-secret-key")
+STORAGE_PATH = "src/phi_cloud/backend/storage"
 STORAGE_PATH = "backend/storage"
 MAX_DISK_USAGE_PERCENT = 90.0
 
 app = FastAPI(
     title="ΦΦ-Cloud API",
+    description="API for General-Purpose Holographic Processing Unit",
+    version="2.0.0"
+)
+executor = ThreadPoolExecutor()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# --- Helper Functions ---
+def verify_api_key(x_api_key: str = Header(...)):
+    if x_api_key != API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid API Key")
+
+# --- Pydantic Models for API ---
+class VPUConfigRequest(BaseModel):
+    input_ports: List[int]
+    output_ports: List[int]
+    truth_table: List[Tuple[List[int], List[int]]]
+
+# --- VPU Compilation Logic ---
+def compile_and_visualize_sync(config: VPUConfigRequest) -> str:
+    try:
+        logger.info("Initializing VPU based on API request...")
+        substrate = PhiSubstrate(shape=(256, 1024), dx=0.2e-6)
+        vpu = VirtualHolographicPU(
+            substrate=substrate,
+            input_ports=config.input_ports,
+            output_ports=config.output_ports,
+            port_width=10
+        )
+
+        logger.info(f"Learning function from truth table: {config.truth_table}")
+        delta_n, loss_history = vpu.learn_function(config.truth_table)
+
+        is_verified = vpu.verify(config.truth_table)
+        logger.info(f"Verification successful: {is_verified}")
+
+        # --- Visualization ---
+        logger.info("Generating hardware schematic visualization...")
+        fig, ax = plt.subplots(1, 1, figsize=(10, 5))
+        fig.patch.set_facecolor('#050505')
+
+        im = ax.imshow(delta_n.T, cmap='viridis', aspect='auto', origin='lower')
+        ax.set_title(f"Compiled Geometry (Verified: {is_verified})", color='white')
+
+        # Plot ports
+        for port_idx in vpu.input_ports:
+            ax.axvline(x=port_idx, color='lime', linestyle='--', label='Input Port')
+        for port_idx in vpu.output_ports:
+            ax.axvline(x=port_idx, color='red', linestyle='--', label='Output Port')
+
+        # Create a single legend entry for ports
+        handles, labels = ax.get_legend_handles_labels()
+        by_label = dict(zip(labels, handles))
+        ax.legend(by_label.values(), by_label.keys())
+
+        fig.colorbar(im, ax=ax, label="Δn (Refractive Index Change)")
     description="API for Holographic Tensor Processing Unit",
     version="1.0.0"
 )
@@ -229,6 +299,7 @@ def compile_and_visualize_sync(truth_table: List[Tuple[int, int]]) -> str:
 
 @app.post("/compile-hologram")
 async def compile_hologram(
+    request: VPUConfigRequest,
     request: TruthTableRequest,
     x_api_key: str = Header(...)
 ):
@@ -236,6 +307,8 @@ async def compile_hologram(
     Compiles a function from a truth table and returns a visualization.
     """
     verify_api_key(x_api_key)
+    loop = asyncio.get_running_loop()
+    image_path = await loop.run_in_executor(executor, compile_and_visualize_sync, request)
     check_disk_pressure()
 
     loop = asyncio.get_running_loop()
@@ -252,6 +325,13 @@ async def compile_hologram(
 
 @app.on_event("startup")
 async def on_startup():
+    Path(STORAGE_PATH).mkdir(exist_ok=True, parents=True)
+
+@app.on_event("shutdown")
+async def on_shutdown():
+    storage_path = Path(STORAGE_PATH)
+    if storage_path.exists():
+        shutil.rmtree(storage_path)
     """Create storage directory on startup."""
     Path(STORAGE_PATH).mkdir(exist_ok=True)
 

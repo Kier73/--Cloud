@@ -2,6 +2,8 @@ import numpy as np
 import scipy.fft
 import matplotlib.pyplot as plt
 from scipy.ndimage import gaussian_filter
+import os
+from typing import List, Tuple
 import tempfile
 import os
 import uuid
@@ -11,6 +13,36 @@ import uuid
 # ==============================================================================
 
 class PhiSubstrate:
+    def __init__(self, shape=(128, 256), wavelength=1.55e-6, dx=0.1e-6, dz=0.5e-6, n0=1.45):
+        self.shape = shape
+        self.ny, self.nz = shape
+        self.dx = dx
+        self.dz = dz
+        self.n0 = n0
+        self.k0 = 2 * np.pi / wavelength
+        np.random.seed(42)
+        self.delta_n = np.random.normal(0, 1e-4, self.shape).astype(np.float32)
+        kx = 2 * np.pi * scipy.fft.fftfreq(self.ny, self.dx)
+        self.diffraction_op = np.exp(-1j * (kx**2 * self.dz) / (2 * self.k0 * self.n0))
+
+    def propagate(self, field_in, store_fields=False):
+        psi = field_in.copy().astype(np.complex64)
+        if store_fields: self.forward_fields = [psi]
+        for z_idx in range(self.nz):
+            psi *= np.exp(1j * self.k0 * self.delta_n[:, z_idx] * self.dz)
+            psi = scipy.fft.ifft(scipy.fft.fft(psi) * self.diffraction_op)
+            if store_fields: self.forward_fields.append(psi)
+        return psi
+
+    def backpropagate(self, field_in):
+        psi = field_in.copy().astype(np.complex64)
+        self.backward_fields = [psi]
+        for z_idx in range(self.nz - 1, -1, -1):
+            psi = scipy.fft.ifft(scipy.fft.fft(psi) * np.conj(self.diffraction_op))
+            psi *= np.exp(-1j * self.k0 * self.delta_n[:, z_idx] * self.dz)
+            self.backward_fields.append(psi)
+        self.backward_fields.reverse()
+        return psi
     """
     The Physical Layer.
     Represents a block of non-linear optical glass (Kerr Medium).
@@ -71,6 +103,37 @@ class PhiSubstrate:
 # ==============================================================================
 
 class NeuroOpticalCompiler:
+    def __init__(self, substrate: PhiSubstrate, learning_rate=1e-3, epochs=50):
+        self.sub = substrate
+        self.lr = learning_rate
+        self.epochs = epochs
+
+    def compile(self, vpu: 'VirtualHolographicPU', truth_table: List[Tuple[List[int], List[int]]], energy_high=1.0, energy_low=0.0):
+        loss_history = []
+        for epoch in range(self.epochs):
+            total_loss = 0
+            grad_accum = np.zeros_like(self.sub.delta_n)
+            for input_vec, target_vec in truth_table:
+                initial_field = vpu._encode_input(input_vec)
+                final_field = self.sub.propagate(initial_field, store_fields=True)
+                output_energies = vpu._measure_output(final_field)
+                target_energies = [energy_high if bit == 1 else energy_low for bit in target_vec]
+                loss = np.sum([(out - tar)**2 for out, tar in zip(output_energies, target_energies)])
+                total_loss += loss
+                error_signal = np.zeros(self.sub.ny, dtype=np.complex64)
+                for i, port_idx in enumerate(vpu.output_ports):
+                    err = 2 * (output_energies[i] - target_energies[i])
+                    error_signal[vpu._get_port_slice(port_idx)] += err * final_field[vpu._get_port_slice(port_idx)]
+                self.sub.backpropagate(error_signal)
+                grad = np.imag(np.conj(np.array(self.sub.forward_fields[:-1])) * np.array(self.sub.backward_fields[1:]))
+                grad_accum += grad.T * self.sub.k0 * self.sub.dz
+
+            smoothed_grad = gaussian_filter(grad_accum, sigma=1.0)
+            self.sub.delta_n -= self.lr * smoothed_grad
+            self.sub.delta_n = np.clip(self.sub.delta_n, 0, 0.05)
+            loss_history.append(total_loss / len(truth_table))
+            if epoch % 10 == 0: print(f"Epoch {epoch}, Avg Loss: {loss_history[-1]:.4e}")
+        return self.sub.delta_n, loss_history
     """
     The 'Software'.
     Uses Optical Backpropagation to carve logic from examples.
@@ -151,6 +214,68 @@ class NeuroOpticalCompiler:
 # ==============================================================================
 
 class VirtualHolographicPU:
+    def __init__(self, substrate: PhiSubstrate, input_ports: List[int], output_ports: List[int], port_width: int = 5):
+        self.substrate = substrate
+        self.compiler = NeuroOpticalCompiler(self.substrate)
+        self.input_ports = input_ports
+        self.output_ports = output_ports
+        self.port_width = port_width
+        self.x_coords = np.arange(self.substrate.ny) * self.substrate.dx
+
+    def _get_port_slice(self, port_pos_idx):
+        start = max(0, port_pos_idx - self.port_width // 2)
+        end = min(self.substrate.ny, port_pos_idx + self.port_width // 2)
+        return slice(start, end)
+
+    def _encode_input(self, input_vector: List[int], amplitude: float = 1.0, sigma_x: float = None):
+        if sigma_x is None: sigma_x = self.port_width * self.substrate.dx
+        initial_field = np.zeros(self.substrate.ny, dtype=np.complex64)
+        for i, bit in enumerate(input_vector):
+            if bit == 1:
+                port_pos = self.input_ports[i] * self.substrate.dx
+                initial_field += amplitude * np.exp(-(self.x_coords - port_pos)**2 / (2 * sigma_x**2))
+        return initial_field
+
+    def _measure_output(self, final_field: np.ndarray) -> List[float]:
+        output_energies = []
+        for port_pos_idx in self.output_ports:
+            intensity = np.abs(final_field[self._get_port_slice(port_pos_idx)])**2
+            energy = np.sum(intensity) * self.substrate.dx
+            output_energies.append(energy)
+        return output_energies
+
+    def execute(self, input_vector: List[int], store_fields=False):
+        initial_field = self._encode_input(input_vector)
+        final_field = self.substrate.propagate(initial_field, store_fields=store_fields)
+        return self._measure_output(final_field)
+
+    def learn_function(self, truth_table: List[Tuple[List[int], List[int]]]):
+        print("[VPU] Invoking gradient-based compiler...")
+        return self.compiler.compile(self, truth_table)
+
+    def verify(self, truth_table: List[Tuple[List[int], List[int]]], energy_high=1.0, energy_low=0.0):
+        print("\n[VERIFY] Verifying compiled logic...")
+        e_thresh = (energy_high + energy_low) / 2.0
+        correct_cases = 0
+        total_cases = len(truth_table)
+
+        for i, (input_vec, target_vec) in enumerate(truth_table):
+            output_energies = self.execute(input_vec)
+            # Heaviside step function for thresholding
+            result_vec = [1 if energy >= e_thresh else 0 for energy in output_energies]
+
+            is_correct = (result_vec == target_vec)
+            if is_correct:
+                correct_cases += 1
+
+            print(f"  Case #{i+1}: Input={input_vec}, Target={target_vec}, Result={result_vec}, Energies={[f'{e:.2f}' for e in output_energies]} -> {'PASS' if is_correct else 'FAIL'}")
+
+        accuracy = (correct_cases / total_cases) * 100
+        print(f"[VERIFY] Verification complete. Accuracy: {accuracy:.2f}% ({correct_cases}/{total_cases})")
+        return accuracy == 100
+
+# ==============================================================================
+# DEMONSTRATION
     """
     The Public API.
     Call this from your Python scripts.
@@ -203,6 +328,30 @@ class VirtualHolographicPU:
 
 def main():
     print("="*60)
+    print("PHI-OS: Compilation and Verification")
+    print("="*60)
+
+    substrate = PhiSubstrate(shape=(256, 1024), dx=0.2e-6)
+    vpu = VirtualHolographicPU(substrate=substrate, input_ports=[64], output_ports=[192], port_width=10)
+
+    truth_table = [([1], [1]), ([0], [0])]
+
+    delta_n_final, loss_history = vpu.learn_function(truth_table)
+
+    vpu.verify(truth_table)
+
+    # Visualize
+    fig, axes = plt.subplots(1, 2, figsize=(15, 6))
+    axes[0].plot(loss_history)
+    axes[0].set_title("Loss History")
+    axes[0].set_xlabel("Epoch")
+    axes[0].set_ylabel("Mean Squared Error")
+    axes[0].set_yscale('log')
+
+    im = axes[1].imshow(delta_n_final.T, aspect='auto', cmap='viridis', origin='lower')
+    axes[1].set_title("Compiled Substrate (Δn)")
+    fig.colorbar(im, ax=axes[1])
+
     print("PHI-OS: VIRTUAL HOLOGRAPHIC PROCESSING UNIT")
     print("Mode: Self-Compiling Logic")
     print("="*60)
